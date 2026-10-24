@@ -35,21 +35,21 @@ class EveJitaTraderApp(ctk.CTk):
         self.lbl_budget = ctk.CTkLabel(self.input_frame, text="Budget (ISK):")
         self.lbl_budget.grid(row=0, column=0, padx=10, pady=10, sticky="w")
         self.ent_budget = ctk.CTkEntry(self.input_frame, width=150)
-        self.ent_budget.insert(0, "1000000000") # Default 1 Bilione
+        self.ent_budget.insert(0, "2000000000") # Default 2 Bilioni
         self.ent_budget.grid(row=0, column=1, padx=10, pady=10)
 
         # ROI Target (%)
         self.lbl_roi = ctk.CTkLabel(self.input_frame, text="ROI Minimo (%):")
         self.lbl_roi.grid(row=0, column=2, padx=10, pady=10, sticky="w")
         self.ent_roi = ctk.CTkEntry(self.input_frame, width=80)
-        self.ent_roi.insert(0, "5.0")
+        self.ent_roi.insert(0, "3.0") # Abbassato a 3% di default per Jita 4-4
         self.ent_roi.grid(row=0, column=3, padx=10, pady=10)
 
         # Tasse Totali (%)
         self.lbl_tax = ctk.CTkLabel(self.input_frame, text="Tasse Totali (%):")
         self.lbl_tax.grid(row=0, column=4, padx=10, pady=10, sticky="w")
         self.ent_tax = ctk.CTkEntry(self.input_frame, width=80)
-        self.ent_tax.insert(0, "3.0") # Broker Fee + Sales Tax
+        self.ent_tax.insert(0, "6.75") 
         self.ent_tax.grid(row=0, column=5, padx=10, pady=10)
 
         # Pulsante Avvio Analisi
@@ -121,22 +121,36 @@ class EveJitaTraderApp(ctk.CTk):
             market_summary = pd.merge(market_summary, sell_volumes, on='type_id', how='inner')
             market_summary = pd.merge(market_summary, buy_volumes, on='type_id', how='inner')
 
-            # Recupero dei nomi degli item
-            self.txt_output.insert("end", "Download dei nomi degli oggetti in corso...\n")
-            names_map = self.get_item_names(market_summary['type_id'].tolist())
+            # Filtriamo dove il prezzo di vendita è maggiore del prezzo di acquisto (spread positivo)
+            market_summary = market_summary[market_summary['min_sell_price'] > market_summary['max_buy_price']]
 
+            # Recupero dei nomi degli item
+            self.txt_output.insert("end", "Trovati ordini validi. Download dei nomi degli oggetti in corso...\n")
+            names_map = self.get_item_names(market_summary['type_id'].tolist())
             market_summary['item_name'] = market_summary['type_id'].map(names_map)
 
-            # Calcoli ROI e margini (Station trading: acquisto con Buy Order, vendita con Sell Order)
+            # Calcolo Station Trading:
+            # Tu piazzi un Buy Order al prezzo (max_buy_price) e rivendi tramite Sell Order al prezzo (min_sell_price).
+            # Oppure compri istantaneamente al min_sell_price e rivendi... (Qui consideriamo la strategia classica Buy Order -> Sell Order).
+            # Ricavo netto dalla vendita = min_sell_price * (1 - tax_rate)
+            # Costo = max_buy_price
             market_summary['net_revenue'] = market_summary['min_sell_price'] * (1 - tax_rate)
             market_summary['unit_profit'] = market_summary['net_revenue'] - market_summary['max_buy_price']
             market_summary['roi'] = (market_summary['unit_profit'] / market_summary['max_buy_price']) * 100
 
+            # Filtriamo per budget (costo unitario o totale) e ROI target
             filtered = market_summary[
                 (market_summary['max_buy_price'] <= budget) & 
                 (market_summary['roi'] >= min_roi) &
                 (market_summary['unit_profit'] > 0)
             ].sort_values(by='roi', ascending=False)
+
+            if filtered.empty:
+                # Se non trova nulla col ROI stretto, mostra i top 30 con ROI maggiore in assoluto per non lasciare la schermata vuota
+                self.txt_output.insert("end", f"Nessun item soddisfa il ROI >= {min_roi}%. Ecco i migliori disponibili sul mercato:\n\n")
+                filtered = market_summary[market_summary['max_buy_price'] <= budget].sort_values(by='roi', ascending=False).head(30)
+            else:
+                self.txt_output.insert("end", f"Trovati {len(filtered)} item con ROI >= {min_roi}%:\n\n")
 
             output_str = f"{'Nome Item':<35} | {'Costo Buy (ISK)':<20} | {'Vendita Sell (ISK)':<20} | {'ROI (%)':<8} | {'Vol. Disponibile':<15}\n"
             output_str += "-" * 115 + "\n"
